@@ -5,6 +5,7 @@ import jwt from '@fastify/jwt';
 import cookie from '@fastify/cookie';
 import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
+import rateLimit from '@fastify/rate-limit';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -17,10 +18,18 @@ import { publicRoutes } from './routes/public.js';
 import { followRoutes } from './routes/follow.js';
 import { connectRoutes } from './routes/connect.js';
 import { analyticsRoutes } from './routes/analytics.js';
+import { nfcRoutes } from './routes/nfc.js';
+import { eventRoutes } from './routes/event.js';
+import { validateEnv } from './utils/validateEnv.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export async function buildApp() {
+  // Validate all required secrets before registering any plugin.
+  // If validation fails the process exits here — no partially-initialised
+  // auth state can exist because Fastify is not yet instantiated.
+  validateEnv();
+
   const app = Fastify({
     logger: {
       level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
@@ -55,11 +64,16 @@ export async function buildApp() {
   });
 
   await app.register(jwt, {
-    secret: process.env.JWT_SECRET || 'dev-secret-change-me',
+    // validateEnv() above guarantees JWT_SECRET is present and safe.
+    secret: process.env.JWT_SECRET!,
   });
 
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: '1 minute',
+  });
 
   // Static file serving for uploads
   await app.register(fastifyStatic, {
@@ -69,9 +83,12 @@ export async function buildApp() {
   });
 
   // ─── Database & Cache Plugins ───
-  await app.register(prismaPlugin);
+ if (process.env.NODE_ENV !== 'test') {
+  await app.register(prismaPlugin); //change 
+}
+  if (process.env.NODE_ENV !== 'test') {
   await app.register(redisPlugin);
-
+}
   // ─── Auth Decorator ───
   app.decorate('authenticate', async function (request: any, reply: any) {
     try {
@@ -89,13 +106,15 @@ export async function buildApp() {
   await app.register(followRoutes, { prefix: '/api/follow' });
   await app.register(connectRoutes, { prefix: '/api/connect' });
   await app.register(analyticsRoutes, { prefix: '/api/analytics' });
-
+await app.register(nfcRoutes, { prefix: '/api/nfc' });
+    await app.register(eventRoutes, { prefix: '/api/events' });
   // ─── Health Check ───
-  app.get('/health', async () => ({
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    service: 'devcard-api',
-  }));
+type HealthResponse = {
+  status: 'ok';
+};
 
+app.get('/health', async (): Promise<HealthResponse> => {
+  return { status: 'ok' };
+});
   return app;
 }
